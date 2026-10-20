@@ -1,0 +1,43 @@
+name: Build
+
+# Build otomatis di mesin macOS GitHub → pengguna tinggal unduh .app jadi
+# (tidak perlu Xcode Command Line Tools di Mac sendiri)
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build LiteScroller.app (universal)
+        run: ARCH=universal ./scripts/build.sh
+
+      - name: Buat installer & zip
+        run: |
+          ./scripts/make-installer.sh
+          ditto -c -k --keepParent build/LiteScroller.app dist/LiteScroller.zip
+          (cd dist && zip -q install-LiteScroller.zip install-LiteScroller.command)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiteScroller
+          path: |
+            dist/LiteScroller.zip
+            dist/install-LiteScroller.zip
+
+      - name: Rilis (kalau push tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/LiteScroller.zip
+            dist/install-LiteScroller.zip
