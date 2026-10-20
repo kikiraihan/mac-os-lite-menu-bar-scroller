@@ -4,7 +4,7 @@ name: Build
 # (tidak perlu Xcode Command Line Tools di Mac sendiri)
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
