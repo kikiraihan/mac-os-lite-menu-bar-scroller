@@ -19,7 +19,8 @@ Dibuat dengan Swift + AppKit murni, satu file sumber, tanpa dependensi.
 - Tutup otomatis setelah 5 / 10 / 30 / 60 detik (atau tidak pernah)
 - Buka saat login
 - Ikon otomatis mengikuti tema terang/gelap
-- Hemat sumber daya: tidak ada timer yang berjalan terus, CPU 0% saat diam
+- Hemat sumber daya: tidak ada polling, CPU 0% saat diam (hanya cek pembaruan sehari sekali)
+- Update ke versi terbaru langsung dari menu
 - Uninstall langsung dari menu
 
 ## Kenapa ada mode scroller?
@@ -90,6 +91,18 @@ cd mac-os-lite-menu-bar-scroller
 ./scripts/build.sh
 cp -R build/LiteScroller.app /Applications/
 ```
+
+## Update
+
+Klik kanan `‹` → **Cek pembaruan…**. LiteScroller mengecek rilis terbaru di halaman Releases GitHub
+(otomatis juga saat dibuka dan sehari sekali; kalau ada versi baru, judul menu berubah jadi
+**Update tersedia: vX…**). Pilih **Update sekarang**: file `LiteScroller.zip` diunduh, `LiteScroller.app`
+lama diganti, lalu aplikasi dibuka lagi. Pengaturan tetap tersimpan.
+
+> Karena aplikasi ditandatangani ad-hoc, setelah update izin Aksesibilitas (mode scroller) mungkin perlu diberikan ulang.
+
+Kalau aplikasi dijalankan dari folder yang tidak bisa ditulis (atau langsung dari Downloads),
+halaman rilis dibuka supaya Anda bisa mengunduh manual.
 
 ## Uninstall
 
