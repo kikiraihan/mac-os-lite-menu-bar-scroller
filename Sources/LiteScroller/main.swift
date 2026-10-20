@@ -412,6 +412,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let help = NSMenuItem(title: "Cara pakai…", action: #selector(showHelp), keyEquivalent: "")
         help.target = self
         menu.addItem(help)
+        let un = NSMenuItem(title: "Uninstall LiteScroller…", action: #selector(uninstall), keyEquivalent: "")
+        un.target = self
+        menu.addItem(un)
         menu.addItem(NSMenuItem(title: "Keluar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
@@ -488,6 +491,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
         scheduleCollapse()
+    }
+
+    /// Hapus LiteScroller dari Mac: login item, izin Aksesibilitas, pengaturan, lalu .app dipindahkan ke Tong Sampah
+    @objc func uninstall() {
+        hideStrip()
+        let a = NSAlert()
+        a.messageText = "Uninstall LiteScroller?"
+        a.informativeText = "Ikon yang tersembunyi akan tampil lagi. LiteScroller dihapus dari 'Buka saat login' dan daftar izin Aksesibilitas, pengaturannya dihapus, lalu LiteScroller.app dipindahkan ke Tong Sampah dan aplikasi ditutup."
+        a.alertStyle = .warning
+        a.addButton(withTitle: "Uninstall")
+        a.addButton(withTitle: "Batal")
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+
+        setCollapsed(false) // kembalikan ikon yang disembunyikan
+        try? SMAppService.mainApp.unregister()
+        if let id = Bundle.main.bundleIdentifier {
+            // cabut izin Aksesibilitas supaya tidak tertinggal di Pengaturan Sistem
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            p.arguments = ["reset", "Accessibility", id]
+            try? p.run()
+            p.waitUntilExit()
+            d.removePersistentDomain(forName: id)
+            d.synchronize()
+        }
+        let appURL = Bundle.main.bundleURL
+        if appURL.pathExtension != "app" || (try? FileManager.default.trashItem(at: appURL, resultingItemURL: nil)) == nil {
+            // tidak punya izin tulis (mis. dipasang oleh admin lain) → minta pengguna menghapus manual
+            let f = NSAlert()
+            f.messageText = "LiteScroller.app tidak bisa dipindahkan otomatis"
+            f.informativeText = "Pengaturan sudah dihapus. Seret LiteScroller.app ke Tong Sampah secara manual."
+            f.runModal()
+            NSWorkspace.shared.activateFileViewerSelecting([appURL])
+        }
+        NSApp.terminate(nil)
     }
 }
 

@@ -20,6 +20,7 @@ Dibuat dengan Swift + AppKit murni, satu file sumber, tanpa dependensi.
 - Buka saat login
 - Ikon otomatis mengikuti tema terang/gelap
 - Hemat sumber daya: tidak ada timer yang berjalan terus, CPU 0% saat diam
+- Uninstall langsung dari menu
 
 ## Kenapa ada mode scroller?
 
@@ -88,6 +89,20 @@ git clone https://github.com/kikiraihan/mac-os-lite-menu-bar-scroller.git
 cd mac-os-lite-menu-bar-scroller
 ./scripts/build.sh
 cp -R build/LiteScroller.app /Applications/
+```
+
+## Uninstall
+
+Klik kanan `‹` → **Uninstall LiteScroller…**. Ikon yang tersembunyi tampil lagi, LiteScroller dihapus dari
+"Buka saat login" dan daftar izin Aksesibilitas, pengaturannya dihapus, lalu `LiteScroller.app` dipindahkan ke Tong Sampah.
+
+Atau manual lewat Terminal:
+
+```bash
+pkill -x LiteScroller
+rm -rf /Applications/LiteScroller.app
+tccutil reset Accessibility id.local.litescroller
+defaults delete id.local.litescroller
 ```
 
 ## Struktur repo
