@@ -39,6 +39,7 @@ func axTrusted(prompt: Bool) -> Bool {
 /// Satu ikon menu bar milik aplikasi lain
 struct BarItem {
     let el: AXUIElement; let frame: CGRect; let label: String; let icon: NSImage?
+    let key: String // pengenal untuk cache gambar (pid + nama item)
     var shot: NSImage? = nil // gambar asli ikon (kalau izin Rekam Layar ada)
 }
 
@@ -90,7 +91,7 @@ func extrasItems(pid: pid_t) -> [BarItem] {
         guard let f = axFrame(k), f.width > 0, f.width < 1000 else { continue } // lewati separator panjang app lain
         let label = axString(k, "AXTitle") ?? axString(k, "AXDescription")
             ?? axString(k, "AXHelp") ?? app?.localizedName ?? "?"
-        out.append(BarItem(el: k, frame: f, label: label, icon: icon))
+        out.append(BarItem(el: k, frame: f, label: label, icon: icon, key: "\(pid):\(label)"))
     }
     return out
 }
@@ -127,8 +128,24 @@ func snapshot(_ f: CGRect, _ wins: [(id: CGWindowID, frame: CGRect)]) -> NSImage
     guard let w = wins.filter({ $0.frame.contains(mid) }).min(by: { $0.frame.width < $1.frame.width }) else { return nil }
     let opts = CGWindowImageOption([.boundsIgnoreFraming, .bestResolution]).rawValue
     guard let cg = fn(.null, CGWindowListOption.optionIncludingWindow.rawValue, w.id, opts)?.takeRetainedValue(),
-          cg.width > 1, cg.height > 1 else { return nil }
+          cg.width > 1, cg.height > 1, hasContent(cg) else { return nil }
     return NSImage(cgImage: cg, size: w.frame.size)
+}
+
+/// false kalau gambar kosong (transparan semua), mis. jendela ikon yang sedang di luar layar
+func hasContent(_ cg: CGImage) -> Bool {
+    let w = 32, h = 16
+    // context tanpa buffer sendiri → CG yang mengelola memorinya (abu-abu + alpha)
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 2,
+                              space: CGColorSpaceCreateDeviceGray(),
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+          let data = ctx.data else { return true }
+    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+    let px = data.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+    for y in 0..<h {
+        for x in 0..<w where px[y * ctx.bytesPerRow + x * 2 + 1] > 8 { return true }
+    }
+    return false
 }
 
 // MARK: - Strip scroller
@@ -367,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var stripItems: [BarItem] = []
     var monitors: [Any] = []
     var loadingStrip = false
+    var shotCache: [String: NSImage] = [:] // gambar ikon terakhir yang berhasil diambil
     let dropMenu = NSMenu() // daftar ikon tersembunyi (mode dropdown)
 
     // item pengaturan
@@ -426,6 +444,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sep.length = collapsed ? collapsedLength : dividerLength
         sep.button?.image = collapsed ? nil : dividerImage
         updateToggleIcon()
+        if !collapsed {
+            // tunggu menu bar selesai menata ulang ikon
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.refreshShotCache() }
+        }
     }
 
     func updateToggleIcon() {
@@ -473,31 +495,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func loadHidden(_ done: @escaping ([BarItem]?) -> Void) {
         guard !loadingStrip else { return }
         guard axTrusted(prompt: false) else { return done(nil) }
+        guard let tWin = toggle.button?.window, let sWin = sep.button?.window else { return }
         loadingStrip = true
-        // buka pemisah sebentar: ikon tersembunyi kembali ke posisi aslinya, sehingga posisi & gambarnya
-        // bisa dibaca (saat terdorong keluar layar, banyak ikon tidak terbaca → strip tidak lengkap)
-        let wait = collapsed ? 0.3 : 0
-        if collapsed { setCollapsed(false) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-            guard let self, let tWin = self.toggle.button?.window, let sWin = self.sep.button?.window else {
-                self?.loadingStrip = false
-                return
+        // pemisah TIDAK dibuka (supaya menu bar tidak berkedip ke mode buka-tutup): saat tertutup pemisah
+        // memanjang ke kiri, jadi ikon tersembunyi = ikon di kiri ujung kiri pemisah (walau di luar layar).
+        // Ikon di antara pemisah & tombol tetap terlihat di menu bar.
+        let limit = separatorIsLeft() ? sWin.frame.minX : tWin.frame.minX
+        scanItems(limit: limit) { [weak self] items in
+            self?.loadingStrip = false
+            done(items)
+        }
+    }
+
+    /// Baca ikon di kiri `limit` (di background) + gambarnya; gambar yang gagal diambil
+    /// (mis. ikon sedang di luar layar) diganti gambar terakhir dari cache
+    func scanItems(limit: CGFloat, _ done: @escaping ([BarItem]) -> Void) {
+        let capture = screenCaptureAllowed()
+        DispatchQueue.global(qos: .userInitiated).async {
+            var items = barItems().filter { $0.frame.midX < limit }
+            if capture {
+                let wins = statusWindows()
+                for i in items.indices { items[i].shot = snapshot(items[i].frame, wins) }
             }
-            // ikon di kiri pemisah (ikon di antara pemisah & tombol tetap terlihat di menu bar)
-            let limit = self.separatorIsLeft() ? sWin.frame.minX : tWin.frame.minX
-            let capture = screenCaptureAllowed()
-            DispatchQueue.global(qos: .userInitiated).async {
-                var items = barItems().filter { $0.frame.midX < limit }
-                if capture {
-                    let wins = statusWindows()
-                    for i in items.indices { items[i].shot = snapshot(items[i].frame, wins) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for i in items.indices {
+                    if let shot = items[i].shot { self.shotCache[items[i].key] = shot }
+                    else { items[i].shot = self.shotCache[items[i].key] }
                 }
-                DispatchQueue.main.async {
-                    self.loadingStrip = false
-                    done(items)
-                }
+                done(items)
             }
         }
+    }
+
+    /// Saat pemisah terbuka (ikon tampil di menu bar), simpan gambar ikon ke cache untuk strip / dropdown
+    func refreshShotCache() {
+        guard listMode, !collapsed, !loadingStrip, axTrusted(prompt: false), screenCaptureAllowed(),
+              let sWin = sep.button?.window, separatorIsLeft() else { return }
+        scanItems(limit: sWin.frame.minX) { _ in }
     }
 
     /// items == nil → belum ada izin Aksesibilitas
