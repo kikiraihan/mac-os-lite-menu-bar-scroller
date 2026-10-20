@@ -1,7 +1,8 @@
-// LiteScroller — pemisah (separator) menu bar macOS dengan dua mode:
+// LiteScroller — pemisah (separator) menu bar macOS dengan tiga mode:
 //   • Buka-tutup : ikon di kiri pemisah disembunyikan / ditampilkan (seperti Hidden Bar)
 //   • Scroller   : ikon tersembunyi ditampilkan di strip yang bisa digulir, jadi tetap
 //                  terjangkau walau menu aplikasi (teks di kiri) terlalu panjang / ada notch
+//   • Dropdown   : ikon tersembunyi ditampilkan sebagai daftar menu di bawah tombol
 // Build: ./scripts/build.sh  (butuh Xcode Command Line Tools)
 
 import Cocoa
@@ -36,7 +37,10 @@ func axTrusted(prompt: Bool) -> Bool {
 }
 
 /// Satu ikon menu bar milik aplikasi lain
-struct BarItem { let el: AXUIElement; let frame: CGRect; let label: String; let icon: NSImage? }
+struct BarItem {
+    let el: AXUIElement; let frame: CGRect; let label: String; let icon: NSImage?
+    var shot: NSImage? = nil // gambar asli ikon (kalau izin Rekam Layar ada)
+}
 
 /// PID aplikasi yang punya jendela di level status bar (= punya ikon menu bar).
 /// Info ini tidak butuh izin Screen Recording (hanya PID & layer, bukan isi jendela).
@@ -52,30 +56,79 @@ func statusItemPIDs() -> Set<pid_t> {
 
 /// Semua ikon menu bar (kecuali milik LiteScroller), urut dari kiri ke kanan
 func barItems() -> [BarItem] {
+    // di macOS baru jendela ikon menu bar bisa dimiliki proses sistem (bukan aplikasinya),
+    // jadi daftar PID dari jendela saja tidak cukup → gabungkan dengan semua aplikasi yang berjalan
     var pids = statusItemPIDs()
-    if pids.isEmpty { pids = Set(NSWorkspace.shared.runningApplications.map { $0.processIdentifier }) }
+    pids.formUnion(NSWorkspace.shared.runningApplications.map { $0.processIdentifier })
     pids.remove(getpid())
+    let list = Array(pids)
+    let lock = NSLock()
     var out: [BarItem] = []
-    for pid in pids {
-        let appEl = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(appEl, 0.3) // aplikasi yang macet tidak ikut membuat kita macet
-        guard let bar = axAttr(appEl, "AXExtrasMenuBar"), CFGetTypeID(bar) == AXUIElementGetTypeID(),
-              let kids = axAttr(bar as! AXUIElement, "AXChildren") as? [AXUIElement] else { continue }
-        let app = NSRunningApplication(processIdentifier: pid)
-        // ikon aplikasi hanya untuk app biasa; proses sistem (Control Center, dsb.) ikonnya generik
-        var icon: NSImage?
-        if let a = app, let url = a.bundleURL, !url.path.hasPrefix("/System"), let ic = a.icon?.copy() as? NSImage {
-            ic.size = NSSize(width: 16, height: 16)
-            icon = ic
-        }
-        for k in kids {
-            guard let f = axFrame(k), f.width > 0, f.width < 1000 else { continue } // lewati separator panjang app lain
-            let label = axString(k, "AXTitle") ?? axString(k, "AXDescription")
-                ?? axString(k, "AXHelp") ?? app?.localizedName ?? "?"
-            out.append(BarItem(el: k, frame: f, label: label, icon: icon))
-        }
+    // dicek paralel supaya aplikasi yang lambat menjawab tidak membuat strip lama muncul
+    DispatchQueue.concurrentPerform(iterations: list.count) { i in
+        let found = extrasItems(pid: list[i])
+        lock.lock(); out += found; lock.unlock()
     }
     return out.sorted { $0.frame.minX < $1.frame.minX }
+}
+
+/// Ikon menu bar milik satu proses (lewat AXExtrasMenuBar)
+func extrasItems(pid: pid_t) -> [BarItem] {
+    var out: [BarItem] = []
+    let appEl = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(appEl, 0.3) // aplikasi yang macet tidak ikut membuat kita macet
+    guard let bar = axAttr(appEl, "AXExtrasMenuBar"), CFGetTypeID(bar) == AXUIElementGetTypeID(),
+          let kids = axAttr(bar as! AXUIElement, "AXChildren") as? [AXUIElement] else { return [] }
+    let app = NSRunningApplication(processIdentifier: pid)
+    // ikon aplikasi hanya untuk app biasa; proses sistem (Control Center, dsb.) ikonnya generik
+    var icon: NSImage?
+    if let a = app, let url = a.bundleURL, !url.path.hasPrefix("/System"), let ic = a.icon?.copy() as? NSImage {
+        ic.size = NSSize(width: 16, height: 16)
+        icon = ic
+    }
+    for k in kids {
+        guard let f = axFrame(k), f.width > 0, f.width < 1000 else { continue } // lewati separator panjang app lain
+        let label = axString(k, "AXTitle") ?? axString(k, "AXDescription")
+            ?? axString(k, "AXHelp") ?? app?.localizedName ?? "?"
+        out.append(BarItem(el: k, frame: f, label: label, icon: icon))
+    }
+    return out
+}
+
+// MARK: - Gambar asli ikon (opsional, butuh izin Rekam Layar)
+
+/// CGWindowListCreateImage diambil lewat dlsym: di SDK macOS 15+ fungsi ini ditandai tidak tersedia
+/// saat compile, padahal masih berjalan di sistem
+typealias WindowImageFn = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+let windowImageFn: WindowImageFn? = {
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return nil } // RTLD_DEFAULT
+    return unsafeBitCast(sym, to: WindowImageFn.self)
+}()
+
+func screenCaptureAllowed() -> Bool { CGPreflightScreenCaptureAccess() }
+
+/// Jendela di level status bar (tiap ikon menu bar = satu jendela kecil)
+func statusWindows() -> [(id: CGWindowID, frame: CGRect)] {
+    let layer = Int(CGWindowLevelForKey(.statusWindow))
+    guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return [] }
+    return list.compactMap { w in
+        guard (w[kCGWindowLayer as String] as? Int) == layer,
+              let id = w[kCGWindowNumber as String] as? Int,
+              let b = w[kCGWindowBounds as String] as? NSDictionary,
+              let f = CGRect(dictionaryRepresentation: b as CFDictionary), f.width > 0, f.width < 1000 else { return nil }
+        return (CGWindowID(id), f)
+    }
+}
+
+/// Foto jendela ikon yang posisinya sama dengan frame Accessibility-nya (koordinat keduanya sama: kiri-atas)
+func snapshot(_ f: CGRect, _ wins: [(id: CGWindowID, frame: CGRect)]) -> NSImage? {
+    guard let fn = windowImageFn else { return nil }
+    let mid = CGPoint(x: f.midX, y: f.midY)
+    guard let w = wins.filter({ $0.frame.contains(mid) }).min(by: { $0.frame.width < $1.frame.width }) else { return nil }
+    let opts = CGWindowImageOption([.boundsIgnoreFraming, .bestResolution]).rawValue
+    guard let cg = fn(.null, CGWindowListOption.optionIncludingWindow.rawValue, w.id, opts)?.takeRetainedValue(),
+          cg.width > 1, cg.height > 1 else { return nil }
+    return NSImage(cgImage: cg, size: w.frame.size)
 }
 
 // MARK: - Strip scroller
@@ -305,18 +358,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var collapseTimer: Timer?
 
     var scrollMode: Bool { d.string(forKey: "mode") == "scroll" }
+    var dropdownMode: Bool { d.string(forKey: "mode") == "dropdown" }
+    /// mode scroller & dropdown: ikon tetap tersembunyi, dijangkau lewat strip / daftar
+    var listMode: Bool { scrollMode || dropdownMode }
 
     // strip scroller
     var strip: StripPanel?
     var stripItems: [BarItem] = []
     var monitors: [Any] = []
+    var loadingStrip = false
+    let dropMenu = NSMenu() // daftar ikon tersembunyi (mode dropdown)
 
     // item pengaturan
     let modeToggleItem = NSMenuItem(title: "Mode buka-tutup", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     let modeScrollItem = NSMenuItem(title: "Mode scroller", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
+    let modeDropdownItem = NSMenuItem(title: "Mode dropdown", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     var delayItems: [NSMenuItem] = []
     let loginItem = NSMenuItem(title: "Buka saat login", action: #selector(AppDelegate.toggleLogin), keyEquivalent: "")
-    let axItem = NSMenuItem(title: "Izin Aksesibilitas (untuk mode scroller)…", action: #selector(AppDelegate.requestAccess), keyEquivalent: "")
+    let axItem = NSMenuItem(title: "Izin Aksesibilitas (untuk mode scroller & dropdown)…", action: #selector(AppDelegate.requestAccess), keyEquivalent: "")
+    let screenItem = NSMenuItem(title: "Izin Rekam Layar (gambar ikon asli di strip)…", action: #selector(AppDelegate.requestScreen), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ n: Notification) {
         d.register(defaults: ["mode": "toggle", "autoCollapse": 10.0])
@@ -371,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func updateToggleIcon() {
         let name: String
         if scrollMode { name = strip?.isVisible == true ? "chevron.right.2" : "chevron.left.2" }
+        else if dropdownMode { name = "chevron.down" }
         else { name = collapsed ? "chevron.left" : "chevron.right" }
         toggle.button?.image = symbol(name)
     }
@@ -391,6 +452,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if scrollMode {
             if strip?.isVisible == true { hideStrip() } else { showStrip() }
+        } else if dropdownMode {
+            showDropdown()
         } else {
             setCollapsed(!collapsed)
             if !collapsed { scheduleCollapse() }
@@ -402,21 +465,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: strip scroller
 
     func showStrip() {
+        loadHidden { [weak self] items in self?.presentStrip(items) }
+    }
+
+    /// Baca ikon tersembunyi (di kiri pemisah) lalu panggil done di main thread;
+    /// done(nil) kalau belum ada izin Aksesibilitas
+    func loadHidden(_ done: @escaping ([BarItem]?) -> Void) {
+        guard !loadingStrip else { return }
+        guard axTrusted(prompt: false) else { return done(nil) }
+        loadingStrip = true
+        // buka pemisah sebentar: ikon tersembunyi kembali ke posisi aslinya, sehingga posisi & gambarnya
+        // bisa dibaca (saat terdorong keluar layar, banyak ikon tidak terbaca → strip tidak lengkap)
+        let wait = collapsed ? 0.3 : 0
+        if collapsed { setCollapsed(false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self, let tWin = self.toggle.button?.window, let sWin = self.sep.button?.window else {
+                self?.loadingStrip = false
+                return
+            }
+            // ikon di kiri pemisah (ikon di antara pemisah & tombol tetap terlihat di menu bar)
+            let limit = self.separatorIsLeft() ? sWin.frame.minX : tWin.frame.minX
+            let capture = screenCaptureAllowed()
+            DispatchQueue.global(qos: .userInitiated).async {
+                var items = barItems().filter { $0.frame.midX < limit }
+                if capture {
+                    let wins = statusWindows()
+                    for i in items.indices { items[i].shot = snapshot(items[i].frame, wins) }
+                }
+                DispatchQueue.main.async {
+                    self.loadingStrip = false
+                    done(items)
+                }
+            }
+        }
+    }
+
+    /// items == nil → belum ada izin Aksesibilitas
+    func presentStrip(_ items: [BarItem]?) {
         guard let tWin = toggle.button?.window, let sWin = sep.button?.window,
               let screen = tWin.screen ?? NSScreen.main else { return }
         // ikon tetap disembunyikan di menu bar; strip menampilkannya di atas menu bar
-        if !collapsed { setCollapsed(true) }
+        setCollapsed(true)
 
         // tepi kanan strip = ujung kanan pemisah (ikon di antara pemisah & tombol tetap terlihat)
         let right = separatorIsLeft() ? min(sWin.frame.maxX, tWin.frame.minX) : tWin.frame.minX
         var left = screen.frame.minX
         if let r = screen.auxiliaryTopRightArea { left = max(left, r.minX) } // jangan masuk ke bawah notch
-        let frame = NSRect(x: left, y: tWin.frame.minY, width: max(right - left, 120), height: tWin.frame.height)
 
         let panel = strip ?? makeStrip()
         strip = panel
-        panel.setFrame(frame, display: false)
-        fillStrip(panel)
+        let content = fillStrip(panel, items)
+        // strip selebar isinya saja (rata kanan ke pemisah), kalau tidak muat baru bisa digulir
+        let width = min(max(content, 120), max(right - left, 120))
+        panel.setFrame(NSRect(x: right - width, y: tWin.frame.minY, width: width, height: tWin.frame.height), display: true)
+        scrollToEnd(panel)
         panel.orderFrontRegardless()
         updateToggleIcon()
 
@@ -433,6 +535,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return e
             }) { monitors.append(m) }
         }
+    }
+
+    // MARK: dropdown
+
+    func showDropdown() {
+        loadHidden { [weak self] items in self?.presentDropdown(items) }
+    }
+
+    /// Daftar ikon tersembunyi sebagai menu di bawah tombol; items == nil → belum ada izin Aksesibilitas
+    func presentDropdown(_ items: [BarItem]?) {
+        setCollapsed(true) // ikon tetap disembunyikan di menu bar
+        dropMenu.removeAllItems()
+        dropMenu.autoenablesItems = false
+        dropMenu.delegate = self
+        stripItems = items ?? []
+
+        if items == nil {
+            let it = NSMenuItem(title: "Butuh izin Aksesibilitas — klik untuk membuka Pengaturan",
+                                action: #selector(requestAccess), keyEquivalent: "")
+            it.target = self
+            dropMenu.addItem(it)
+        } else if stripItems.isEmpty {
+            let it = NSMenuItem(title: "Belum ada ikon tersembunyi. Tahan ⌘ lalu seret ikon ke kiri pemisah |",
+                                action: nil, keyEquivalent: "")
+            it.isEnabled = false
+            dropMenu.addItem(it)
+        }
+        // urutan dari kanan (terdekat ke pemisah) ke kiri, sama seperti strip yang mulai dari kanan
+        for (i, it) in stripItems.enumerated().reversed() {
+            let title = it.label.count > 40 ? String(it.label.prefix(39)) + "…" : it.label
+            let m = NSMenuItem(title: title, action: #selector(pressItem(_:)), keyEquivalent: "")
+            m.target = self
+            m.tag = i
+            m.toolTip = it.label
+            if let img = it.shot {
+                // gambar asli ikon diperkecil ke tinggi baris menu
+                let h: CGFloat = 18
+                let copy = img.copy() as? NSImage
+                copy?.size = NSSize(width: img.size.width * h / max(img.size.height, 1), height: h)
+                m.image = copy
+            } else {
+                m.image = it.icon
+            }
+            dropMenu.addItem(m)
+        }
+
+        // pasang menu sebentar supaya muncul di bawah tombol, lalu lepas lagi (klik kiri tetap jadi aksi)
+        toggle.menu = dropMenu
+        toggle.button?.performClick(nil)
     }
 
     func hideStrip() {
@@ -463,26 +614,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return p
     }
 
-    func fillStrip(_ panel: StripPanel) {
-        guard let fx = panel.contentView else { return }
+    /// Isi strip; mengembalikan lebar isi yang dibutuhkan
+    func fillStrip(_ panel: StripPanel, _ items: [BarItem]?) -> CGFloat {
+        guard let fx = panel.contentView else { return 0 }
         fx.subviews.forEach { $0.removeFromSuperview() }
-        let size = panel.frame.size
 
         let stack = NSStackView()
         stack.orientation = .horizontal
-        stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 4)
+        stack.spacing = 0
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 2)
 
-        stripItems = []
-        if !axTrusted(prompt: false) {
+        stripItems = items ?? []
+        if items == nil {
             let b = NSButton(title: "LiteScroller butuh izin Aksesibilitas untuk mode scroller — klik untuk membuka Pengaturan",
                              target: self, action: #selector(requestAccess))
             styleStripButton(b)
             stack.addView(b, in: .trailing)
         } else {
-            // ikon di kiri pemisah (pemisah sedang memanjang ke kiri, jadi pakai titik tengahnya)
-            let sMid = sep.button?.window?.frame.midX ?? .greatestFiniteMagnitude
-            stripItems = barItems().filter { $0.frame.midX < sMid }
             if stripItems.isEmpty {
                 let l = NSTextField(labelWithString: "Belum ada ikon tersembunyi. Tahan ⌘ lalu seret ikon ke kiri pemisah |")
                 l.font = NSFont.menuBarFont(ofSize: 0)
@@ -490,17 +638,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 stack.addView(l, in: .trailing)
             }
             for (i, it) in stripItems.enumerated() {
-                let title = it.label.count > 24 ? String(it.label.prefix(23)) + "…" : it.label
-                let b = NSButton(title: title, target: self, action: #selector(pressItem(_:)))
+                let b: NSButton
+                if let img = it.shot ?? it.icon {
+                    // gambar asli ikon (atau ikon aplikasinya) saja, tanpa teks — seperti di menu bar
+                    b = NSButton(image: img, target: self, action: #selector(pressItem(_:)))
+                    b.imagePosition = .imageOnly
+                } else {
+                    let title = it.label.count > 24 ? String(it.label.prefix(23)) + "…" : it.label
+                    b = NSButton(title: title, target: self, action: #selector(pressItem(_:)))
+                }
                 b.tag = i
                 b.toolTip = it.label
-                if let ic = it.icon { b.image = ic; b.imagePosition = .imageLeading }
                 styleStripButton(b)
+                if it.shot != nil {
+                    // lebar sama dengan ikon aslinya, jadi jaraknya sama seperti di menu bar
+                    b.isBordered = false
+                    b.widthAnchor.constraint(equalToConstant: it.frame.width).isActive = true
+                } else if it.icon != nil {
+                    b.isBordered = false
+                    b.widthAnchor.constraint(equalToConstant: 28).isActive = true
+                }
                 stack.addView(b, in: .trailing)
             }
         }
 
         // isi strip rata kanan (dekat pemisah), seperti urutan asli di menu bar
+        let size = panel.frame.size
+        let fit = stack.fittingSize
+        let height = toggle.button?.window?.frame.height ?? size.height
         let scroll = HScrollView(frame: NSRect(origin: .zero, size: size))
         scroll.autoresizingMask = [.width, .height]
         scroll.drawsBackground = false
@@ -510,12 +675,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         scroll.scrollerStyle = .overlay
         scroll.horizontalScrollElasticity = .allowed
         scroll.verticalScrollElasticity = .none
-        let fit = stack.fittingSize
-        stack.frame = NSRect(x: 0, y: 0, width: max(fit.width, size.width), height: size.height)
+        stack.frame = NSRect(x: 0, y: 0, width: fit.width, height: height)
         scroll.documentView = stack
         fx.addSubview(scroll)
-        // mulai dari ujung kanan: ikon terdekat ke pemisah terlihat dulu, gulir ke kiri untuk yang lain
-        scroll.contentView.scroll(to: NSPoint(x: max(stack.frame.width - size.width, 0), y: 0))
+        return fit.width
+    }
+
+    /// Mulai dari ujung kanan: ikon terdekat ke pemisah terlihat dulu, gulir ke kiri untuk yang lain
+    func scrollToEnd(_ panel: StripPanel) {
+        guard let fx = panel.contentView, let scroll = fx.subviews.first as? NSScrollView,
+              let doc = scroll.documentView else { return }
+        scroll.frame = fx.bounds
+        let w = fx.bounds.width
+        // kalau isi lebih sempit dari strip (lebar minimal), isi tetap rata kanan (gravity .trailing)
+        doc.frame = NSRect(x: 0, y: 0, width: max(doc.frame.width, w), height: fx.bounds.height)
+        scroll.contentView.scroll(to: NSPoint(x: max(doc.frame.width - w, 0), y: 0))
         scroll.reflectScrolledClipView(scroll.contentView)
     }
 
@@ -526,10 +700,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         b.lineBreakMode = .byTruncatingTail
     }
 
-    /// Klik ikon di strip → buka sementara lalu "tekan" ikon aslinya lewat Accessibility
-    @objc func pressItem(_ b: NSButton) {
-        guard b.tag < stripItems.count else { return }
-        let el = stripItems[b.tag].el
+    /// Klik ikon di strip / dropdown → buka sementara lalu "tekan" ikon aslinya lewat Accessibility
+    @objc func pressItem(_ sender: AnyObject) {
+        let tag = (sender as? NSMenuItem)?.tag ?? (sender as? NSButton)?.tag ?? -1
+        guard tag >= 0, tag < stripItems.count else { return }
+        let el = stripItems[tag].el
         hideStrip()
         setCollapsed(false) // supaya menu/popover milik ikon itu muncul di posisi yang terlihat
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -540,7 +715,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             guard let self else { return }
             let s = self.d.double(forKey: "autoCollapse")
-            self.scheduleCollapse(s > 0 ? max(s, 10) : 15) // mode scroller selalu kembali tertutup
+            self.scheduleCollapse(s > 0 ? max(s, 10) : 15) // mode scroller & dropdown selalu kembali tertutup
         }
     }
 
@@ -561,6 +736,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modeScrollItem.target = self
         modeScrollItem.representedObject = "scroll"
         menu.addItem(modeScrollItem)
+        modeDropdownItem.target = self
+        modeDropdownItem.representedObject = "dropdown"
+        menu.addItem(modeDropdownItem)
         menu.addItem(.separator())
 
         // submenu: tutup otomatis
@@ -580,6 +758,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(loginItem)
         axItem.target = self
         menu.addItem(axItem)
+        screenItem.target = self
+        menu.addItem(screenItem)
         menu.addItem(.separator())
 
         let help = NSMenuItem(title: "Cara pakai…", action: #selector(showHelp), keyEquivalent: "")
@@ -603,12 +783,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) { toggle.menu = nil }
 
     func updateChecks() {
-        modeToggleItem.state = scrollMode ? .off : .on
+        modeToggleItem.state = listMode ? .off : .on
         modeScrollItem.state = scrollMode ? .on : .off
+        modeDropdownItem.state = dropdownMode ? .on : .off
         let cur = d.double(forKey: "autoCollapse")
         for it in delayItems { it.state = (it.representedObject as? Double) == cur ? .on : .off }
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         axItem.state = axTrusted(prompt: false) ? .on : .off
+        screenItem.state = screenCaptureAllowed() ? .on : .off
     }
 
     // MARK: aksi
@@ -618,17 +800,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         d.set(m, forKey: "mode")
         hideStrip()
         setCollapsed(true)
-        if m == "scroll" && !axTrusted(prompt: false) { requestAccess() }
+        if m != "toggle" && !axTrusted(prompt: false) { requestAccess() }
     }
     @objc func setDelay(_ s: NSMenuItem) {
         guard let v = s.representedObject as? Double else { return }
         d.set(v, forKey: "autoCollapse")
-        if !collapsed && !scrollMode { scheduleCollapse() }
+        if !collapsed && !listMode { scheduleCollapse() }
     }
     @objc func requestAccess() {
         hideStrip()
         if !axTrusted(prompt: true),
            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    /// Opsional: tanpa izin ini strip menampilkan ikon aplikasi / nama item, bukan gambar asli ikonnya
+    @objc func requestScreen() {
+        hideStrip()
+        if !CGRequestScreenCaptureAccess(),
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }
     }
@@ -660,7 +850,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Mode scroller: klik ‹ menampilkan strip di atas menu bar berisi semua ikon tersembunyi. \
         Gulir dengan trackpad atau roda mouse, lalu klik ikon untuk membukanya. Cocok kalau \
         menu aplikasi terlalu panjang atau ada notch, sehingga sebagian ikon tetap tertutup. \
-        Mode ini butuh izin Aksesibilitas.
+        Mode dropdown: klik ⌄ menampilkan daftar semua ikon tersembunyi sebagai menu di bawah tombol. \
+        Mode scroller & dropdown butuh izin Aksesibilitas. Beri juga izin Rekam Layar (opsional) \
+        supaya strip / daftar menampilkan gambar asli ikon, sama seperti di menu bar.
         """
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
@@ -672,7 +864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hideStrip()
         let a = NSAlert()
         a.messageText = "Uninstall LiteScroller?"
-        a.informativeText = "Ikon yang tersembunyi akan tampil lagi. LiteScroller dihapus dari 'Buka saat login' dan daftar izin Aksesibilitas, pengaturannya dihapus, lalu LiteScroller.app dipindahkan ke Tong Sampah dan aplikasi ditutup."
+        a.informativeText = "Ikon yang tersembunyi akan tampil lagi. LiteScroller dihapus dari 'Buka saat login' dan daftar izin Aksesibilitas & Rekam Layar, pengaturannya dihapus, lalu LiteScroller.app dipindahkan ke Tong Sampah dan aplikasi ditutup."
         a.alertStyle = .warning
         a.addButton(withTitle: "Uninstall")
         a.addButton(withTitle: "Batal")
@@ -682,12 +874,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setCollapsed(false) // kembalikan ikon yang disembunyikan
         try? SMAppService.mainApp.unregister()
         if let id = Bundle.main.bundleIdentifier {
-            // cabut izin Aksesibilitas supaya tidak tertinggal di Pengaturan Sistem
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-            p.arguments = ["reset", "Accessibility", id]
-            try? p.run()
-            p.waitUntilExit()
+            // cabut izin Aksesibilitas (dan Rekam Layar) supaya tidak tertinggal di Pengaturan Sistem
+            for service in ["Accessibility", "ScreenCapture"] {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+                p.arguments = ["reset", service, id]
+                try? p.run()
+                p.waitUntilExit()
+            }
             d.removePersistentDomain(forName: id)
             d.synchronize()
         }
