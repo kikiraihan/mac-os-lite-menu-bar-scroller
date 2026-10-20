@@ -1,7 +1,8 @@
-// LiteScroller — pemisah (separator) menu bar macOS dengan dua mode:
+// LiteScroller — pemisah (separator) menu bar macOS dengan tiga mode:
 //   • Buka-tutup : ikon di kiri pemisah disembunyikan / ditampilkan (seperti Hidden Bar)
 //   • Scroller   : ikon tersembunyi ditampilkan di strip yang bisa digulir, jadi tetap
 //                  terjangkau walau menu aplikasi (teks di kiri) terlalu panjang / ada notch
+//   • Dropdown   : ikon tersembunyi ditampilkan sebagai daftar menu di bawah tombol
 // Build: ./scripts/build.sh  (butuh Xcode Command Line Tools)
 
 import Cocoa
@@ -357,19 +358,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var collapseTimer: Timer?
 
     var scrollMode: Bool { d.string(forKey: "mode") == "scroll" }
+    var dropdownMode: Bool { d.string(forKey: "mode") == "dropdown" }
+    /// mode scroller & dropdown: ikon tetap tersembunyi, dijangkau lewat strip / daftar
+    var listMode: Bool { scrollMode || dropdownMode }
 
     // strip scroller
     var strip: StripPanel?
     var stripItems: [BarItem] = []
     var monitors: [Any] = []
     var loadingStrip = false
+    let dropMenu = NSMenu() // daftar ikon tersembunyi (mode dropdown)
 
     // item pengaturan
     let modeToggleItem = NSMenuItem(title: "Mode buka-tutup", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     let modeScrollItem = NSMenuItem(title: "Mode scroller", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
+    let modeDropdownItem = NSMenuItem(title: "Mode dropdown", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     var delayItems: [NSMenuItem] = []
     let loginItem = NSMenuItem(title: "Buka saat login", action: #selector(AppDelegate.toggleLogin), keyEquivalent: "")
-    let axItem = NSMenuItem(title: "Izin Aksesibilitas (untuk mode scroller)…", action: #selector(AppDelegate.requestAccess), keyEquivalent: "")
+    let axItem = NSMenuItem(title: "Izin Aksesibilitas (untuk mode scroller & dropdown)…", action: #selector(AppDelegate.requestAccess), keyEquivalent: "")
     let screenItem = NSMenuItem(title: "Izin Rekam Layar (gambar ikon asli di strip)…", action: #selector(AppDelegate.requestScreen), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -425,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func updateToggleIcon() {
         let name: String
         if scrollMode { name = strip?.isVisible == true ? "chevron.right.2" : "chevron.left.2" }
+        else if dropdownMode { name = "chevron.down" }
         else { name = collapsed ? "chevron.left" : "chevron.right" }
         toggle.button?.image = symbol(name)
     }
@@ -445,6 +452,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if scrollMode {
             if strip?.isVisible == true { hideStrip() } else { showStrip() }
+        } else if dropdownMode {
+            showDropdown()
         } else {
             setCollapsed(!collapsed)
             if !collapsed { scheduleCollapse() }
@@ -456,8 +465,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: strip scroller
 
     func showStrip() {
+        loadHidden { [weak self] items in self?.presentStrip(items) }
+    }
+
+    /// Baca ikon tersembunyi (di kiri pemisah) lalu panggil done di main thread;
+    /// done(nil) kalau belum ada izin Aksesibilitas
+    func loadHidden(_ done: @escaping ([BarItem]?) -> Void) {
         guard !loadingStrip else { return }
-        guard axTrusted(prompt: false) else { return presentStrip(nil) }
+        guard axTrusted(prompt: false) else { return done(nil) }
         loadingStrip = true
         // buka pemisah sebentar: ikon tersembunyi kembali ke posisi aslinya, sehingga posisi & gambarnya
         // bisa dibaca (saat terdorong keluar layar, banyak ikon tidak terbaca → strip tidak lengkap)
@@ -479,7 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 DispatchQueue.main.async {
                     self.loadingStrip = false
-                    self.presentStrip(items)
+                    done(items)
                 }
             }
         }
@@ -520,6 +535,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return e
             }) { monitors.append(m) }
         }
+    }
+
+    // MARK: dropdown
+
+    func showDropdown() {
+        loadHidden { [weak self] items in self?.presentDropdown(items) }
+    }
+
+    /// Daftar ikon tersembunyi sebagai menu di bawah tombol; items == nil → belum ada izin Aksesibilitas
+    func presentDropdown(_ items: [BarItem]?) {
+        setCollapsed(true) // ikon tetap disembunyikan di menu bar
+        dropMenu.removeAllItems()
+        dropMenu.autoenablesItems = false
+        dropMenu.delegate = self
+        stripItems = items ?? []
+
+        if items == nil {
+            let it = NSMenuItem(title: "Butuh izin Aksesibilitas — klik untuk membuka Pengaturan",
+                                action: #selector(requestAccess), keyEquivalent: "")
+            it.target = self
+            dropMenu.addItem(it)
+        } else if stripItems.isEmpty {
+            let it = NSMenuItem(title: "Belum ada ikon tersembunyi. Tahan ⌘ lalu seret ikon ke kiri pemisah |",
+                                action: nil, keyEquivalent: "")
+            it.isEnabled = false
+            dropMenu.addItem(it)
+        }
+        // urutan dari kanan (terdekat ke pemisah) ke kiri, sama seperti strip yang mulai dari kanan
+        for (i, it) in stripItems.enumerated().reversed() {
+            let title = it.label.count > 40 ? String(it.label.prefix(39)) + "…" : it.label
+            let m = NSMenuItem(title: title, action: #selector(pressItem(_:)), keyEquivalent: "")
+            m.target = self
+            m.tag = i
+            m.toolTip = it.label
+            if let img = it.shot {
+                // gambar asli ikon diperkecil ke tinggi baris menu
+                let h: CGFloat = 18
+                let copy = img.copy() as? NSImage
+                copy?.size = NSSize(width: img.size.width * h / max(img.size.height, 1), height: h)
+                m.image = copy
+            } else {
+                m.image = it.icon
+            }
+            dropMenu.addItem(m)
+        }
+
+        // pasang menu sebentar supaya muncul di bawah tombol, lalu lepas lagi (klik kiri tetap jadi aksi)
+        toggle.menu = dropMenu
+        toggle.button?.performClick(nil)
     }
 
     func hideStrip() {
@@ -636,10 +700,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         b.lineBreakMode = .byTruncatingTail
     }
 
-    /// Klik ikon di strip → buka sementara lalu "tekan" ikon aslinya lewat Accessibility
-    @objc func pressItem(_ b: NSButton) {
-        guard b.tag < stripItems.count else { return }
-        let el = stripItems[b.tag].el
+    /// Klik ikon di strip / dropdown → buka sementara lalu "tekan" ikon aslinya lewat Accessibility
+    @objc func pressItem(_ sender: AnyObject) {
+        let tag = (sender as? NSMenuItem)?.tag ?? (sender as? NSButton)?.tag ?? -1
+        guard tag >= 0, tag < stripItems.count else { return }
+        let el = stripItems[tag].el
         hideStrip()
         setCollapsed(false) // supaya menu/popover milik ikon itu muncul di posisi yang terlihat
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -650,7 +715,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             guard let self else { return }
             let s = self.d.double(forKey: "autoCollapse")
-            self.scheduleCollapse(s > 0 ? max(s, 10) : 15) // mode scroller selalu kembali tertutup
+            self.scheduleCollapse(s > 0 ? max(s, 10) : 15) // mode scroller & dropdown selalu kembali tertutup
         }
     }
 
@@ -671,6 +736,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modeScrollItem.target = self
         modeScrollItem.representedObject = "scroll"
         menu.addItem(modeScrollItem)
+        modeDropdownItem.target = self
+        modeDropdownItem.representedObject = "dropdown"
+        menu.addItem(modeDropdownItem)
         menu.addItem(.separator())
 
         // submenu: tutup otomatis
@@ -715,8 +783,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) { toggle.menu = nil }
 
     func updateChecks() {
-        modeToggleItem.state = scrollMode ? .off : .on
+        modeToggleItem.state = listMode ? .off : .on
         modeScrollItem.state = scrollMode ? .on : .off
+        modeDropdownItem.state = dropdownMode ? .on : .off
         let cur = d.double(forKey: "autoCollapse")
         for it in delayItems { it.state = (it.representedObject as? Double) == cur ? .on : .off }
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -731,12 +800,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         d.set(m, forKey: "mode")
         hideStrip()
         setCollapsed(true)
-        if m == "scroll" && !axTrusted(prompt: false) { requestAccess() }
+        if m != "toggle" && !axTrusted(prompt: false) { requestAccess() }
     }
     @objc func setDelay(_ s: NSMenuItem) {
         guard let v = s.representedObject as? Double else { return }
         d.set(v, forKey: "autoCollapse")
-        if !collapsed && !scrollMode { scheduleCollapse() }
+        if !collapsed && !listMode { scheduleCollapse() }
     }
     @objc func requestAccess() {
         hideStrip()
@@ -781,8 +850,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Mode scroller: klik ‹ menampilkan strip di atas menu bar berisi semua ikon tersembunyi. \
         Gulir dengan trackpad atau roda mouse, lalu klik ikon untuk membukanya. Cocok kalau \
         menu aplikasi terlalu panjang atau ada notch, sehingga sebagian ikon tetap tertutup. \
-        Mode ini butuh izin Aksesibilitas. Beri juga izin Rekam Layar (opsional) supaya strip \
-        menampilkan gambar asli ikon, sama seperti di menu bar.
+        Mode dropdown: klik ⌄ menampilkan daftar semua ikon tersembunyi sebagai menu di bawah tombol. \
+        Mode scroller & dropdown butuh izin Aksesibilitas. Beri juga izin Rekam Layar (opsional) \
+        supaya strip / daftar menampilkan gambar asli ikon, sama seperti di menu bar.
         """
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()

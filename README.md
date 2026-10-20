@@ -16,6 +16,8 @@ Dibuat dengan Swift + AppKit murni, satu file sumber, tanpa dependensi.
 - **Mode buka-tutup**: ikon di kiri pemisah `|` disembunyikan / ditampilkan dengan sekali klik `‹`
 - **Mode scroller**: klik `«` untuk menampilkan strip di atas menu bar berisi **semua** ikon tersembunyi.
   Gulir dengan trackpad atau roda mouse, lalu klik ikon untuk membukanya
+- **Mode dropdown**: klik `⌄` untuk menampilkan daftar semua ikon tersembunyi sebagai menu
+  (gambar ikon + nama), lalu klik salah satu untuk membukanya
 - Tutup otomatis setelah 5 / 10 / 30 / 60 detik (atau tidak pernah)
 - Buka saat login
 - Ikon otomatis mengikuti tema terang/gelap
@@ -39,21 +41,21 @@ Setelah dijalankan, di menu bar muncul dua item: `|` (pemisah) dan `‹` (tombol
 
 1. Tahan **⌘** lalu seret ikon yang ingin disembunyikan ke **kiri** pemisah `|`.
    Ikon di antara `|` dan `‹` selalu terlihat.
-2. Klik `‹` untuk membuka / menutup (atau membuka strip di mode scroller).
+2. Klik `‹` untuk membuka / menutup (atau membuka strip di mode scroller / daftar di mode dropdown).
 3. Klik kanan `‹` (atau ⌥-klik, atau klik `|`) untuk pengaturan: pilih mode, tutup otomatis, buka saat login.
 
-### Izin Aksesibilitas (khusus mode scroller)
+### Izin Aksesibilitas (khusus mode scroller & dropdown)
 
-Mode scroller membaca daftar ikon menu bar dan "menekan" ikon yang Anda klik lewat
+Mode scroller & dropdown membaca daftar ikon menu bar dan "menekan" ikon yang Anda klik lewat
 Accessibility API macOS, jadi butuh izin:
 **Pengaturan Sistem → Privasi & Keamanan → Aksesibilitas → aktifkan LiteScroller**.
-LiteScroller akan membuka halaman itu otomatis saat mode scroller dipilih.
+LiteScroller akan membuka halaman itu otomatis saat mode scroller / dropdown dipilih.
 
 Mode buka-tutup **tidak** butuh izin apa pun.
 
-### Izin Rekam Layar (opsional, mode scroller)
+### Izin Rekam Layar (opsional, mode scroller & dropdown)
 
-Supaya strip menampilkan **gambar asli** tiap ikon (sama persis seperti di menu bar), beri izin
+Supaya strip / daftar dropdown menampilkan **gambar asli** tiap ikon (sama persis seperti di menu bar), beri izin
 **Pengaturan Sistem → Privasi & Keamanan → Rekam Layar & Audio Sistem → aktifkan LiteScroller**
 (atau klik kanan `‹` → **Izin Rekam Layar…**). LiteScroller hanya memotret jendela ikon menu bar,
 bukan isi layar lain. Tanpa izin ini strip menampilkan ikon aplikasi (atau nama item kalau ikonnya tidak ada).
@@ -107,7 +109,7 @@ Klik kanan `‹` → **Cek pembaruan…**. LiteScroller mengecek rilis terbaru d
 **Update tersedia: vX…**). Pilih **Update sekarang**: file `LiteScroller.zip` diunduh, `LiteScroller.app`
 lama diganti, lalu aplikasi dibuka lagi. Pengaturan tetap tersimpan.
 
-> Karena aplikasi ditandatangani ad-hoc, setelah update izin Aksesibilitas (mode scroller) mungkin perlu diberikan ulang.
+> Karena aplikasi ditandatangani ad-hoc, setelah update izin Aksesibilitas (mode scroller & dropdown) mungkin perlu diberikan ulang.
 
 Kalau aplikasi dijalankan dari folder yang tidak bisa ditulis (atau langsung dari Downloads),
 halaman rilis dibuka supaya Anda bisa mengunduh manual.
