@@ -51,14 +51,22 @@ LiteScroller akan membuka halaman itu otomatis saat mode scroller dipilih.
 
 Mode buka-tutup **tidak** butuh izin apa pun.
 
+### Izin Rekam Layar (opsional, mode scroller)
+
+Supaya strip menampilkan **gambar asli** tiap ikon (sama persis seperti di menu bar), beri izin
+**Pengaturan Sistem → Privasi & Keamanan → Rekam Layar & Audio Sistem → aktifkan LiteScroller**
+(atau klik kanan `‹` → **Izin Rekam Layar…**). LiteScroller hanya memotret jendela ikon menu bar,
+bukan isi layar lain. Tanpa izin ini strip menampilkan ikon aplikasi (atau nama item kalau ikonnya tidak ada).
+
 > Karena aplikasi ditandatangani ad-hoc, setelah update / build ulang macOS bisa menganggapnya
 > aplikasi baru. Kalau strip menampilkan pesan izin padahal sudah dicentang, hapus LiteScroller
 > dari daftar Aksesibilitas (tombol −) lalu tambahkan lagi.
 
 ### Batasan
 
-- Strip menampilkan ikon aplikasi + nama item (dari Accessibility), bukan gambar asli ikonnya —
-  supaya tidak perlu izin Screen Recording.
+- Tanpa izin Rekam Layar, strip menampilkan ikon aplikasi (atau nama item), bukan gambar asli ikonnya.
+- Saat strip dibuka, pemisah terbuka sekejap (±0,3 detik) supaya posisi & gambar semua ikon
+  tersembunyi bisa dibaca, lalu tertutup lagi.
 - Saat ikon di strip diklik, LiteScroller membuka pemisah sebentar lalu menekan ikon aslinya,
   sehingga menu / popover aplikasi itu muncul di posisinya. Setelah beberapa detik pemisah tertutup lagi.
 - Beberapa aplikasi tidak mengisi nama item; yang tampil adalah nama aplikasinya.
@@ -107,7 +115,7 @@ halaman rilis dibuka supaya Anda bisa mengunduh manual.
 ## Uninstall
 
 Klik kanan `‹` → **Uninstall LiteScroller…**. Ikon yang tersembunyi tampil lagi, LiteScroller dihapus dari
-"Buka saat login" dan daftar izin Aksesibilitas, pengaturannya dihapus, lalu `LiteScroller.app` dipindahkan ke Tong Sampah.
+"Buka saat login" dan daftar izin Aksesibilitas & Rekam Layar, pengaturannya dihapus, lalu `LiteScroller.app` dipindahkan ke Tong Sampah.
 
 Atau manual lewat Terminal:
 
@@ -115,6 +123,7 @@ Atau manual lewat Terminal:
 pkill -x LiteScroller
 rm -rf /Applications/LiteScroller.app
 tccutil reset Accessibility id.local.litescroller
+tccutil reset ScreenCapture id.local.litescroller
 defaults delete id.local.litescroller
 ```
 
