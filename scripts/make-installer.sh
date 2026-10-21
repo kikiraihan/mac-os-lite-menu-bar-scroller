@@ -58,7 +58,9 @@ echo "▶ Compile (± 30 detik)..."
 swiftc -O -swift-version 5 main.swift -o "$APP/Contents/MacOS/LiteScroller"
 
 echo "▶ Codesign (ad-hoc)..."
-codesign --force --sign - "$APP"
+# designated requirement cukup identifier → izin tetap berlaku setelah update / install ulang
+codesign --force --sign - --identifier id.local.litescroller \
+  --requirements '=designated => identifier "id.local.litescroller"' "$APP"
 
 # 5. Tutup versi lama (kalau ada), lalu pasang
 pkill -x LiteScroller 2>/dev/null || true

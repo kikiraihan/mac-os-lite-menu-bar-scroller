@@ -60,9 +60,9 @@ Supaya strip / daftar dropdown menampilkan **gambar asli** tiap ikon (sama persi
 (atau klik kanan `‹` → **Izin Rekam Layar…**). LiteScroller hanya memotret jendela ikon menu bar,
 bukan isi layar lain. Tanpa izin ini strip menampilkan ikon aplikasi (atau nama item kalau ikonnya tidak ada).
 
-> Karena aplikasi ditandatangani ad-hoc, setelah update / build ulang macOS bisa menganggapnya
-> aplikasi baru. Kalau strip menampilkan pesan izin padahal sudah dicentang, hapus LiteScroller
-> dari daftar Aksesibilitas (tombol −) lalu tambahkan lagi.
+> Sejak v0.6.1 izin tetap berlaku setelah update / build ulang. Kalau Anda update dari versi
+> sebelum v0.6.1, atau strip menampilkan pesan izin padahal sudah dicentang, hapus LiteScroller
+> dari daftar Aksesibilitas (tombol −) lalu tambahkan lagi — cukup sekali.
 
 ### Batasan
 
@@ -110,7 +110,8 @@ Klik kanan `‹` → **Cek pembaruan…**. LiteScroller mengecek rilis terbaru d
 **Update tersedia: vX…**). Pilih **Update sekarang**: file `LiteScroller.zip` diunduh, `LiteScroller.app`
 lama diganti, lalu aplikasi dibuka lagi. Pengaturan tetap tersimpan.
 
-> Karena aplikasi ditandatangani ad-hoc, setelah update izin Aksesibilitas (mode scroller & dropdown) mungkin perlu diberikan ulang.
+> Sejak v0.6.1 izin Aksesibilitas & Rekam Layar tetap berlaku setelah update. Update dari versi sebelum
+> v0.6.1 masih perlu memberi izin ulang **sekali** (hapus LiteScroller dari daftar lalu tambahkan lagi).
 
 Kalau aplikasi dijalankan dari folder yang tidak bisa ditulis (atau langsung dari Downloads),
 halaman rilis dibuka supaya Anda bisa mengunduh manual.
