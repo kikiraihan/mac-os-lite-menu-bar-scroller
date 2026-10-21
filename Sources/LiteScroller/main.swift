@@ -41,6 +41,7 @@ struct BarItem {
     let el: AXUIElement; let frame: CGRect; let label: String; let icon: NSImage?
     let key: String // pengenal untuk cache gambar (pid + nama item)
     var shot: NSImage? = nil // gambar asli ikon (kalau izin Rekam Layar ada)
+    var appName: String? = nil // nama aplikasi biasa (bukan proses sistem), untuk judul di dropdown
 }
 
 /// PID aplikasi yang punya jendela di level status bar (= punya ikon menu bar).
@@ -91,7 +92,8 @@ func extrasItems(pid: pid_t) -> [BarItem] {
         guard let f = axFrame(k), f.width > 0, f.width < 1000 else { continue } // lewati separator panjang app lain
         let label = axString(k, "AXTitle") ?? axString(k, "AXDescription")
             ?? axString(k, "AXHelp") ?? app?.localizedName ?? "?"
-        out.append(BarItem(el: k, frame: f, label: label, icon: icon, key: "\(pid):\(label)"))
+        out.append(BarItem(el: k, frame: f, label: label, icon: icon, key: "\(pid):\(label)",
+                           appName: icon != nil ? app?.localizedName : nil))
     }
     return out
 }
@@ -105,6 +107,28 @@ let windowImageFn: WindowImageFn? = {
     guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return nil } // RTLD_DEFAULT
     return unsafeBitCast(sym, to: WindowImageFn.self)
 }()
+
+/// CGSHWCaptureWindowList (API privat SkyLight, dipakai juga oleh Ice / AltTab): bisa memotret jendela
+/// ikon yang sedang di LUAR layar (saat pemisah tertutup), jadi strip / dropdown tetap memakai gambar asli ikon
+typealias CGSConnectionFn = @convention(c) () -> Int32
+typealias CGSCaptureFn = @convention(c) (Int32, UnsafeMutablePointer<UInt32>, UInt32, UInt32) -> Unmanaged<CFArray>?
+let cgsMainConnection: CGSConnectionFn? = {
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSMainConnectionID") else { return nil }
+    return unsafeBitCast(sym, to: CGSConnectionFn.self)
+}()
+let cgsCaptureFn: CGSCaptureFn? = {
+    guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSHWCaptureWindowList") else { return nil }
+    return unsafeBitCast(sym, to: CGSCaptureFn.self)
+}()
+
+/// Foto satu jendela walau di luar layar (ignoreGlobalClipShape = 1<<11, bestResolution = 1<<8)
+func captureWindow(_ id: CGWindowID) -> CGImage? {
+    guard let conn = cgsMainConnection, let cap = cgsCaptureFn else { return nil }
+    var wid = id
+    guard let arr = cap(conn(), &wid, 1, (1 << 11) | (1 << 8))?.takeRetainedValue(),
+          CFArrayGetCount(arr) > 0, let p = CFArrayGetValueAtIndex(arr, 0) else { return nil }
+    return Unmanaged<CGImage>.fromOpaque(p).takeUnretainedValue()
+}
 
 func screenCaptureAllowed() -> Bool { CGPreflightScreenCaptureAccess() }
 
@@ -123,12 +147,15 @@ func statusWindows() -> [(id: CGWindowID, frame: CGRect)] {
 
 /// Foto jendela ikon yang posisinya sama dengan frame Accessibility-nya (koordinat keduanya sama: kiri-atas)
 func snapshot(_ f: CGRect, _ wins: [(id: CGWindowID, frame: CGRect)]) -> NSImage? {
-    guard let fn = windowImageFn else { return nil }
     let mid = CGPoint(x: f.midX, y: f.midY)
     guard let w = wins.filter({ $0.frame.contains(mid) }).min(by: { $0.frame.width < $1.frame.width }) else { return nil }
-    let opts = CGWindowImageOption([.boundsIgnoreFraming, .bestResolution]).rawValue
-    guard let cg = fn(.null, CGWindowListOption.optionIncludingWindow.rawValue, w.id, opts)?.takeRetainedValue(),
-          cg.width > 1, cg.height > 1, hasContent(cg) else { return nil }
+    // utamakan CGSHWCaptureWindowList (bisa di luar layar); kalau tidak ada / gagal, pakai CGWindowListCreateImage
+    var img = captureWindow(w.id)
+    if img.map({ !hasContent($0) }) ?? true, let fn = windowImageFn {
+        let opts = CGWindowImageOption([.boundsIgnoreFraming, .bestResolution]).rawValue
+        img = fn(.null, CGWindowListOption.optionIncludingWindow.rawValue, w.id, opts)?.takeRetainedValue()
+    }
+    guard let cg = img, cg.width > 1, cg.height > 1, hasContent(cg) else { return nil }
     return NSImage(cgImage: cg, size: w.frame.size)
 }
 
@@ -599,7 +626,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // urutan dari kanan (terdekat ke pemisah) ke kiri, sama seperti strip yang mulai dari kanan
         for (i, it) in stripItems.enumerated().reversed() {
-            let title = it.label.count > 40 ? String(it.label.prefix(39)) + "…" : it.label
+            // nama aplikasi lebih jelas dari judul item (judul bisa berisi nama akun / angka badge)
+            let name = it.appName ?? it.label
+            let title = name.count > 40 ? String(name.prefix(39)) + "…" : name
             let m = NSMenuItem(title: title, action: #selector(pressItem(_:)), keyEquivalent: "")
             m.target = self
             m.tag = i

@@ -67,11 +67,12 @@ bukan isi layar lain. Tanpa izin ini strip menampilkan ikon aplikasi (atau nama 
 ### Batasan
 
 - Tanpa izin Rekam Layar, strip menampilkan ikon aplikasi (atau nama item), bukan gambar asli ikonnya.
-- Gambar asli ikon diambil saat pemisah sedang terbuka (mis. saat aplikasi baru dibuka atau setelah
-  ikon diklik dari strip / dropdown), lalu disimpan. Ikon yang belum pernah terlihat memakai ikon aplikasinya dulu.
+- Gambar asli ikon dipotret langsung walau ikonnya sedang tersembunyi (di luar layar), lewat API privat
+  macOS `CGSHWCaptureWindowList`. Kalau gagal, dipakai gambar terakhir yang tersimpan, lalu ikon aplikasinya.
 - Saat ikon di strip diklik, LiteScroller membuka pemisah sebentar lalu menekan ikon aslinya,
   sehingga menu / popover aplikasi itu muncul di posisinya. Setelah beberapa detik pemisah tertutup lagi.
-- Beberapa aplikasi tidak mengisi nama item; yang tampil adalah nama aplikasinya.
+- Di dropdown, judul item memakai nama aplikasinya (judul asli item tampil sebagai tooltip).
+  Item milik proses sistem (Control Center, dsb.) memakai nama itemnya.
 
 ## Instalasi
 
