@@ -145,8 +145,8 @@ LiteScroller/
 
 ## Rilis
 
-**Otomatis:** naikkan versi di `Resources/Info.plist` (`CFBundleShortVersionString`, mis. `1.1` → `1.2`),
-lalu merge ke `main`. GitHub Actions akan build, membuat tag `v1.2`, dan rilis berisi `LiteScroller.zip` dan
+**Otomatis:** naikkan versi di `Resources/Info.plist` (`CFBundleShortVersionString`, format `a.b.c`, mis. `1.1.0` → `1.2.0`;
+aturan kapan `a`/`b`/`c` naik ada di [`AGENTS.md`](AGENTS.md#versioning)), lalu merge ke `main`. GitHub Actions akan build, membuat tag `v1.2.0`, dan rilis berisi `LiteScroller.zip` dan
 `install-LiteScroller.zip`. Kalau versinya tidak diubah, merge hanya di-build tanpa rilis baru.
 
 **Manual:** push tag versi, maka GitHub Actions akan build lalu melampirkan `LiteScroller.zip` dan `install-LiteScroller.zip` ke halaman Releases:
