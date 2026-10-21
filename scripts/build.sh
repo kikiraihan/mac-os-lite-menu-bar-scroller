@@ -23,7 +23,10 @@ fi
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 echo "▶ Codesign (ad-hoc)..."
-codesign --force --sign - "$APP"
+# designated requirement cukup identifier (bukan cdhash) → izin Aksesibilitas & Rekam Layar
+# tetap berlaku setelah update / build ulang, tidak perlu dihapus lalu ditambah lagi
+codesign --force --sign - --identifier id.local.litescroller \
+  --requirements '=designated => identifier "id.local.litescroller"' "$APP"
 
 echo "✅ Selesai: $APP"
 echo "   Pasang:  cp -R $APP /Applications/ && open /Applications/LiteScroller.app"

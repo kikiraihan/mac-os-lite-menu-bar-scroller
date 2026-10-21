@@ -34,6 +34,12 @@ jobs:
       - name: Build LiteScroller.app (universal)
         run: ARCH=universal ./scripts/build.sh
 
+      # izin TCC hanya bertahan antar-versi kalau designated requirement tidak memakai cdhash
+      - name: Cek designated requirement
+        run: |
+          codesign -d -r- build/LiteScroller.app 2>&1 | tee /dev/stderr \
+            | grep -q 'designated => identifier "id.local.litescroller"$'
+
       - name: Buat installer & zip
         run: |
           ./scripts/make-installer.sh

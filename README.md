@@ -60,9 +60,9 @@ Supaya strip / daftar dropdown menampilkan **gambar asli** tiap ikon (sama persi
 (atau klik kanan `‹` → **Izin Rekam Layar…**). LiteScroller hanya memotret jendela ikon menu bar,
 bukan isi layar lain. Tanpa izin ini strip menampilkan ikon aplikasi (atau nama item kalau ikonnya tidak ada).
 
-> Karena aplikasi ditandatangani ad-hoc, setelah update / build ulang macOS bisa menganggapnya
-> aplikasi baru. Kalau strip menampilkan pesan izin padahal sudah dicentang, hapus LiteScroller
-> dari daftar Aksesibilitas (tombol −) lalu tambahkan lagi.
+> Sejak v0.6.1 izin tetap berlaku setelah update / build ulang. Kalau Anda update dari versi
+> sebelum v0.6.1, atau strip menampilkan pesan izin padahal sudah dicentang, hapus LiteScroller
+> dari daftar Aksesibilitas (tombol −) lalu tambahkan lagi — cukup sekali.
 
 ### Batasan
 
@@ -110,7 +110,8 @@ Klik kanan `‹` → **Cek pembaruan…**. LiteScroller mengecek rilis terbaru d
 **Update tersedia: vX…**). Pilih **Update sekarang**: file `LiteScroller.zip` diunduh, `LiteScroller.app`
 lama diganti, lalu aplikasi dibuka lagi. Pengaturan tetap tersimpan.
 
-> Karena aplikasi ditandatangani ad-hoc, setelah update izin Aksesibilitas (mode scroller & dropdown) mungkin perlu diberikan ulang.
+> Sejak v0.6.1 izin Aksesibilitas & Rekam Layar tetap berlaku setelah update. Update dari versi sebelum
+> v0.6.1 masih perlu memberi izin ulang **sekali** (hapus LiteScroller dari daftar lalu tambahkan lagi).
 
 Kalau aplikasi dijalankan dari folder yang tidak bisa ditulis (atau langsung dari Downloads),
 halaman rilis dibuka supaya Anda bisa mengunduh manual.
@@ -145,8 +146,8 @@ LiteScroller/
 
 ## Rilis
 
-**Otomatis:** naikkan versi di `Resources/Info.plist` (`CFBundleShortVersionString`, mis. `1.1` → `1.2`),
-lalu merge ke `main`. GitHub Actions akan build, membuat tag `v1.2`, dan rilis berisi `LiteScroller.zip` dan
+**Otomatis:** naikkan versi di `Resources/Info.plist` (`CFBundleShortVersionString`, format `a.b.c`, mis. `1.1.0` → `1.2.0`;
+aturan kapan `a`/`b`/`c` naik ada di [`AGENTS.md`](AGENTS.md#versioning)), lalu merge ke `main`. GitHub Actions akan build, membuat tag `v1.2.0`, dan rilis berisi `LiteScroller.zip` dan
 `install-LiteScroller.zip`. Kalau versinya tidak diubah, merge hanya di-build tanpa rilis baru.
 
 **Manual:** push tag versi, maka GitHub Actions akan build lalu melampirkan `LiteScroller.zip` dan `install-LiteScroller.zip` ke halaman Releases:
