@@ -139,6 +139,27 @@ func isInMenuBar(_ p: NSPoint) -> Bool {
     return p.y >= screen.frame.maxY - h
 }
 
+/// Jendela terlihat di layar (bounds dalam koordinat CG: kiri-atas layar utama), urut dari yang paling depan
+func onScreenWindows() -> [(pid: pid_t, layer: Int, frame: CGRect)] {
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] else { return [] }
+    return list.compactMap { w in
+        guard let pid = w[kCGWindowOwnerPID as String] as? Int,
+              let layer = w[kCGWindowLayer as String] as? Int,
+              (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+              let b = w[kCGWindowBounds as String] as? NSDictionary,
+              let f = CGRect(dictionaryRepresentation: b as CFDictionary), f.width > 1, f.height > 1 else { return nil }
+        return (pid_t(pid), layer, f)
+    }
+}
+
+/// PID pemilik jendela paling depan di titik p (koordinat layar Cocoa), mis. ikon menu bar atau popover-nya
+func windowOwner(at p: NSPoint) -> pid_t? {
+    guard let top = NSScreen.screens.first?.frame.maxY else { return nil }
+    let q = CGPoint(x: p.x, y: top - p.y)
+    return onScreenWindows().first(where: { $0.frame.contains(q) })?.pid
+}
+
 func screenCaptureAllowed() -> Bool { CGPreflightScreenCaptureAccess() }
 
 /// Jendela di level status bar (tiap ikon menu bar = satu jendela kecil)
@@ -424,6 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var overlaySwitching = false // sedang memakai trik Dock → abaikan notifikasi ganti aplikasi
     var overlayMonitor: Any? // klik di luar menu bar selama terbuka → tutup
     var lastMenuBarClick = Date.distantPast // klik terakhir di menu bar (mis. ikon yang dibuka)
+    var iconApps: Set<pid_t> = [] // aplikasi yang ikonnya diklik selama terbuka; jendela / popover-nya tidak menutup
 
     // strip scroller
     var strip: StripPanel?
@@ -488,7 +510,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func setCollapsed(_ c: Bool) {
         collapseTimer?.invalidate()
         collapsed = c && separatorIsLeft()
-        if c { endOverlay(restore: true) }
+        if c {
+            endOverlay(restore: true)
+            if let m = overlayMonitor { NSEvent.removeMonitor(m) }
+            overlayMonitor = nil
+            iconApps.removeAll()
+        }
         sep.length = collapsed ? collapsedLength : dividerLength
         sep.button?.image = collapsed ? nil : dividerImage
         updateToggleIcon()
@@ -509,11 +536,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if overlayMonitor == nil {
             // keluar fokus (klik jendela / desktop lain) → tutup lagi, supaya ikon tidak tertimpa menu teks aplikasi itu.
-            // Klik di menu bar (ikon yang baru terlihat) dibiarkan.
+            // Klik di menu bar (ikon yang baru terlihat) dibiarkan, begitu juga klik di jendela / popover yang dibuka
+            // ikon itu (kalau ditutup, ikonnya terdorong keluar layar dan jendelanya ikut hilang / tidak bisa diklik).
+            // Monitor tetap jalan sampai tertutup, walau menu bar sudah diambil aplikasi ikon itu.
             overlayMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
-                guard let self, self.overlayActive else { return }
-                if isInMenuBar(NSEvent.mouseLocation) { self.lastMenuBarClick = Date() }
-                else {
+                guard let self, !self.collapsed else { return }
+                let p = NSEvent.mouseLocation
+                let owner = windowOwner(at: p)
+                if isInMenuBar(p) {
+                    self.lastMenuBarClick = Date()
+                    if let owner, owner != getpid() { self.iconApps.insert(owner) }
+                } else if let owner, self.iconApps.contains(owner) {
+                    // jendela milik ikon yang dibuka → biarkan terbuka
+                } else {
                     self.endOverlay(restore: false) // jendela yang diklik yang jadi aktif, bukan aplikasi sebelumnya
                     self.setCollapsed(true)
                 }
@@ -570,8 +605,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard overlayActive else { return }
         overlayActive = false
         overlaySwitching = false
-        if let m = overlayMonitor { NSEvent.removeMonitor(m) }
-        overlayMonitor = nil
         overlayWindow?.orderOut(nil)
         let prev = overlayPrevApp
         overlayPrevApp = nil
@@ -595,9 +628,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         collapseTimer?.invalidate()
         let s = secs ?? d.double(forKey: "autoCollapse")
         guard s > 0 else { return }
-        let t = Timer(timeInterval: s, repeats: false) { [weak self] _ in self?.setCollapsed(true) }
+        let t = Timer(timeInterval: s, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            // jendela / popover ikon yang dibuka masih tampil → tunda, supaya tidak ikut hilang
+            if self.iconAppWindowOpen() { return self.scheduleCollapse(2) }
+            self.setCollapsed(true)
+        }
         RunLoop.main.add(t, forMode: .common)
         collapseTimer = t
+    }
+
+    /// true kalau aplikasi yang ikonnya diklik masih punya jendela terlihat di luar menu bar
+    func iconAppWindowOpen() -> Bool {
+        guard !iconApps.isEmpty else { return false }
+        let statusLayer = Int(CGWindowLevelForKey(.statusWindow))
+        let bar = NSStatusBar.system.thickness + 2
+        return onScreenWindows().contains { w in
+            iconApps.contains(w.pid) && w.layer != statusLayer && w.frame.maxY > bar
+        }
     }
 
     @objc func toggleClicked() {
@@ -773,7 +821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if overlayActive, !overlaySwitching, let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            a.processIdentifier != getpid() {
             endOverlay(restore: false)
-            if Date().timeIntervalSince(lastMenuBarClick) > 1 { setCollapsed(true) }
+            if Date().timeIntervalSince(lastMenuBarClick) > 1, !iconApps.contains(a.processIdentifier) { setCollapsed(true) }
         }
     }
 
