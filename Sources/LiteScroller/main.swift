@@ -132,6 +132,13 @@ func captureWindow(_ id: CGWindowID) -> CGImage? {
     return Unmanaged<CGImage>.fromOpaque(p).takeUnretainedValue()
 }
 
+/// true kalau titik (koordinat layar) ada di area menu bar salah satu layar
+func isInMenuBar(_ p: NSPoint) -> Bool {
+    guard let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }) else { return false }
+    let h = max(NSStatusBar.system.thickness, screen.frame.maxY - screen.visibleFrame.maxY)
+    return p.y >= screen.frame.maxY - h
+}
+
 func screenCaptureAllowed() -> Bool { CGPreflightScreenCaptureAccess() }
 
 /// Jendela di level status bar (tiap ikon menu bar = satu jendela kecil)
@@ -415,6 +422,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let overlayMenu = NSMenu() // menu bar kosong selama terbuka
     var overlayWindow: NSWindow? // jendela transparan kecil supaya macOS mau mengaktifkan LiteScroller
     var overlaySwitching = false // sedang memakai trik Dock → abaikan notifikasi ganti aplikasi
+    var overlayMonitor: Any? // klik di luar menu bar selama terbuka → tutup
+    var lastMenuBarClick = Date.distantPast // klik terakhir di menu bar (mis. ikon yang dibuka)
 
     // strip scroller
     var strip: StripPanel?
@@ -498,6 +507,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             overlayPrevApp = front?.processIdentifier == getpid() ? nil : front
             overlayActive = true
         }
+        if overlayMonitor == nil {
+            // keluar fokus (klik jendela / desktop lain) → tutup lagi, supaya ikon tidak tertimpa menu teks aplikasi itu.
+            // Klik di menu bar (ikon yang baru terlihat) dibiarkan.
+            overlayMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+                guard let self, self.overlayActive else { return }
+                if isInMenuBar(NSEvent.mouseLocation) { self.lastMenuBarClick = Date() }
+                else {
+                    self.endOverlay(restore: false) // jendela yang diklik yang jadi aktif, bukan aplikasi sebelumnya
+                    self.setCollapsed(true)
+                }
+            }
+        }
         NSApp.setActivationPolicy(.regular) // aplikasi .accessory tidak memegang menu bar
         if overlayMenu.items.isEmpty {
             // satu menu aplikasi kosong (tampil sebagai "LiteScroller"); menu utama yang benar-benar kosong
@@ -549,6 +570,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard overlayActive else { return }
         overlayActive = false
         overlaySwitching = false
+        if let m = overlayMonitor { NSEvent.removeMonitor(m) }
+        overlayMonitor = nil
         overlayWindow?.orderOut(nil)
         let prev = overlayPrevApp
         overlayPrevApp = nil
@@ -744,10 +767,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func appSwitched(_ n: Notification) {
         if strip?.isVisible == true { hideStrip() }
-        // pengguna pindah ke aplikasi lain saat mode timpa terbuka → jangan rebut fokusnya lagi
+        // pengguna pindah ke aplikasi lain saat mode timpa terbuka → jangan rebut fokusnya lagi, dan tutup
+        // (kalau tetap terbuka, ikonnya tertimpa menu teks aplikasi itu). Kecuali aplikasi itu aktif karena
+        // ikonnya di menu bar baru diklik: biarkan terbuka supaya menu / popover-nya tetap di tempat.
         if overlayActive, !overlaySwitching, let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            a.processIdentifier != getpid() {
             endOverlay(restore: false)
+            if Date().timeIntervalSince(lastMenuBarClick) > 1 { setCollapsed(true) }
         }
     }
 
