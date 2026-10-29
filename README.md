@@ -14,6 +14,9 @@ Dibuat dengan Swift + AppKit murni, satu file sumber, tanpa dependensi.
 ## Fitur
 
 - **Mode buka-tutup**: ikon di kiri pemisah `|` disembunyikan / ditampilkan dengan sekali klik `‹`
+- **Mode buka-tutup timpa**: sama seperti buka-tutup, tapi saat terbuka menu teks aplikasi aktif
+  (mis. *File, Edit, View, …*) disembunyikan sementara, jadi ikon asli yang dibuka punya ruang dan tidak
+  ikut tersembunyi oleh macOS. Saat ditutup, aplikasi sebelumnya aktif lagi dan menunya kembali
 - **Mode scroller**: klik `«` untuk menampilkan strip di atas menu bar berisi **semua** ikon tersembunyi.
   Gulir dengan trackpad atau roda mouse, lalu klik ikon untuk membukanya
 - **Mode dropdown**: klik `⌄` untuk menampilkan daftar semua ikon tersembunyi sebagai menu
@@ -51,7 +54,14 @@ Accessibility API macOS, jadi butuh izin:
 **Pengaturan Sistem → Privasi & Keamanan → Aksesibilitas → aktifkan LiteScroller**.
 LiteScroller akan membuka halaman itu otomatis saat mode scroller / dropdown dipilih.
 
-Mode buka-tutup **tidak** butuh izin apa pun.
+Mode buka-tutup & buka-tutup timpa **tidak** butuh izin apa pun.
+
+### Catatan mode buka-tutup timpa
+
+- Selama terbuka, LiteScroller menjadi aplikasi aktif dengan menu bar kosong, jadi ikon LiteScroller
+  bisa muncul sebentar di Dock dan ketikan keyboard tidak masuk ke aplikasi sebelumnya sampai ditutup.
+- Kalau Anda pindah ke aplikasi lain saat terbuka, menu aplikasi itu tampil lagi (sebagian ikon bisa
+  tersembunyi lagi). Pemisah tetap tertutup otomatis sesuai pengaturan *Tutup otomatis*.
 
 ### Izin Rekam Layar (opsional, mode scroller & dropdown)
 
