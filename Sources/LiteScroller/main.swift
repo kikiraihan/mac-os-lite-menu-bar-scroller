@@ -1,5 +1,7 @@
-// LiteScroller — pemisah (separator) menu bar macOS dengan tiga mode:
+// LiteScroller — pemisah (separator) menu bar macOS dengan empat mode:
 //   • Buka-tutup : ikon di kiri pemisah disembunyikan / ditampilkan (seperti Hidden Bar)
+//   • Buka-tutup timpa : sama, tapi saat terbuka menu teks aplikasi aktif (File, Edit, ...)
+//                  disembunyikan sementara supaya ikon yang dibuka punya ruang
 //   • Scroller   : ikon tersembunyi ditampilkan di strip yang bisa digulir, jadi tetap
 //                  terjangkau walau menu aplikasi (teks di kiri) terlalu panjang / ada notch
 //   • Dropdown   : ikon tersembunyi ditampilkan sebagai daftar menu di bawah tombol
@@ -405,6 +407,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var dropdownMode: Bool { d.string(forKey: "mode") == "dropdown" }
     /// mode scroller & dropdown: ikon tetap tersembunyi, dijangkau lewat strip / daftar
     var listMode: Bool { scrollMode || dropdownMode }
+    var overlayMode: Bool { d.string(forKey: "mode") == "overlay" }
+
+    // mode buka-tutup timpa
+    var overlayActive = false
+    var overlayPrevApp: NSRunningApplication? // aplikasi yang aktif sebelum dibuka, diaktifkan lagi saat ditutup
+    let overlayMenu = NSMenu() // menu bar kosong selama terbuka
 
     // strip scroller
     var strip: StripPanel?
@@ -416,6 +424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // item pengaturan
     let modeToggleItem = NSMenuItem(title: "Mode buka-tutup", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
+    let modeOverlayItem = NSMenuItem(title: "Mode buka-tutup timpa", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     let modeScrollItem = NSMenuItem(title: "Mode scroller", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     let modeDropdownItem = NSMenuItem(title: "Mode dropdown", action: #selector(AppDelegate.setMode(_:)), keyEquivalent: "")
     var delayItems: [NSMenuItem] = []
@@ -468,6 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func setCollapsed(_ c: Bool) {
         collapseTimer?.invalidate()
         collapsed = c && separatorIsLeft()
+        if c { endOverlay(restore: true) }
         sep.length = collapsed ? collapsedLength : dividerLength
         sep.button?.image = collapsed ? nil : dividerImage
         updateToggleIcon()
@@ -475,6 +485,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // tunggu menu bar selesai menata ulang ikon
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.refreshShotCache() }
         }
+    }
+
+    /// Mode buka-tutup timpa: LiteScroller jadi aplikasi aktif sementara dengan menu bar kosong,
+    /// jadi menu teks aplikasi lain (File, Edit, ...) hilang dan ruangnya dipakai ikon yang dibuka.
+    /// Ikon yang tampil tetap ikon asli (bukan gambar seperti di mode scroller).
+    func beginOverlay() {
+        if !overlayActive {
+            let front = NSWorkspace.shared.frontmostApplication
+            overlayPrevApp = front?.processIdentifier == getpid() ? nil : front
+            overlayActive = true
+        }
+        NSApp.setActivationPolicy(.regular) // aplikasi .accessory tidak memegang menu bar
+        NSApp.mainMenu = overlayMenu
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Kembalikan menu bar ke aplikasi sebelumnya (restore = false kalau pengguna sudah pindah aplikasi sendiri)
+    func endOverlay(restore: Bool) {
+        guard overlayActive else { return }
+        overlayActive = false
+        let prev = overlayPrevApp
+        overlayPrevApp = nil
+        if restore && NSApp.isActive {
+            if let prev, !prev.isTerminated { prev.activate(options: []) }
+            else { NSApp.hide(nil) } // aplikasi sebelumnya sudah tidak ada → biar macOS memilih aplikasi berikutnya
+        }
+        NSApp.setActivationPolicy(.accessory) // tanpa ikon di Dock lagi
     }
 
     func updateToggleIcon() {
@@ -505,7 +542,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showDropdown()
         } else {
             setCollapsed(!collapsed)
-            if !collapsed { scheduleCollapse() }
+            if !collapsed {
+                if overlayMode { beginOverlay() }
+                scheduleCollapse()
+            }
         }
     }
 
@@ -657,8 +697,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateToggleIcon()
     }
 
-    @objc func appSwitched() {
+    @objc func appSwitched(_ n: Notification) {
         if strip?.isVisible == true { hideStrip() }
+        // pengguna pindah ke aplikasi lain saat mode timpa terbuka → jangan rebut fokusnya lagi
+        if overlayActive, let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+           a.processIdentifier != getpid() {
+            endOverlay(restore: false)
+        }
     }
 
     func makeStrip() -> StripPanel {
@@ -797,6 +842,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         modeToggleItem.target = self
         modeToggleItem.representedObject = "toggle"
         menu.addItem(modeToggleItem)
+        modeOverlayItem.target = self
+        modeOverlayItem.representedObject = "overlay"
+        menu.addItem(modeOverlayItem)
         modeScrollItem.target = self
         modeScrollItem.representedObject = "scroll"
         menu.addItem(modeScrollItem)
@@ -847,7 +895,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) { toggle.menu = nil }
 
     func updateChecks() {
-        modeToggleItem.state = listMode ? .off : .on
+        modeToggleItem.state = listMode || overlayMode ? .off : .on
+        modeOverlayItem.state = overlayMode ? .on : .off
         modeScrollItem.state = scrollMode ? .on : .off
         modeDropdownItem.state = dropdownMode ? .on : .off
         let cur = d.double(forKey: "autoCollapse")
@@ -864,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         d.set(m, forKey: "mode")
         hideStrip()
         setCollapsed(true)
-        if m != "toggle" && !axTrusted(prompt: false) { requestAccess() }
+        if listMode && !axTrusted(prompt: false) { requestAccess() } // buka-tutup & buka-tutup timpa tanpa izin
     }
     @objc func setDelay(_ s: NSMenuItem) {
         guard let v = s.representedObject as? Double else { return }
@@ -911,6 +960,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         3. Klik kanan ‹ (atau klik |) untuk pengaturan.
 
         Mode buka-tutup: ikon di kiri | muncul / hilang langsung di menu bar.
+        Mode buka-tutup timpa: sama, tapi saat terbuka menu teks aplikasi (File, Edit, ...) \
+        disembunyikan sementara supaya ikon punya ruang. Menu kembali saat ditutup.
         Mode scroller: klik ‹ menampilkan strip di atas menu bar berisi semua ikon tersembunyi. \
         Gulir dengan trackpad atau roda mouse, lalu klik ikon untuk membukanya. Cocok kalau \
         menu aplikasi terlalu panjang atau ada notch, sehingga sebagian ikon tetap tertutup. \
