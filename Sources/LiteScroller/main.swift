@@ -413,6 +413,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var overlayActive = false
     var overlayPrevApp: NSRunningApplication? // aplikasi yang aktif sebelum dibuka, diaktifkan lagi saat ditutup
     let overlayMenu = NSMenu() // menu bar kosong selama terbuka
+    var overlayWindow: NSWindow? // jendela transparan kecil supaya macOS mau mengaktifkan LiteScroller
+    var overlaySwitching = false // sedang memakai trik Dock → abaikan notifikasi ganti aplikasi
 
     // strip scroller
     var strip: StripPanel?
@@ -497,14 +499,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             overlayActive = true
         }
         NSApp.setActivationPolicy(.regular) // aplikasi .accessory tidak memegang menu bar
+        if overlayMenu.items.isEmpty {
+            // satu menu aplikasi kosong (tampil sebagai "LiteScroller"); menu utama yang benar-benar kosong
+            // kadang membuat macOS tetap menampilkan menu aplikasi sebelumnya
+            let appItem = NSMenuItem(title: "LiteScroller", action: nil, keyEquivalent: "")
+            appItem.submenu = NSMenu(title: "LiteScroller")
+            overlayMenu.addItem(appItem)
+        }
         NSApp.mainMenu = overlayMenu
+        // kebijakan .regular baru berlaku di putaran run loop berikutnya → aktifkan sesudahnya
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.activateOverlay(retry: true) }
+    }
+
+    func activateOverlay(retry: Bool) {
+        guard overlayActive else { return }
+        // jendela transparan 1×1 yang jadi key window: macOS lebih mau mengaktifkan aplikasi yang punya jendela
+        let w = overlayWindow ?? {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1), styleMask: [.borderless],
+                             backing: .buffered, defer: false)
+            w.isOpaque = false
+            w.backgroundColor = .clear
+            w.ignoresMouseEvents = true
+            w.isReleasedWhenClosed = false
+            w.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+            return w
+        }()
+        overlayWindow = w
+        w.makeKeyAndOrderFront(nil)
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
         NSApp.activate(ignoringOtherApps: true)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.overlayActive else { return }
+            let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            NSLog("LiteScroller timpa: aplikasi aktif = \(front.map(String.init) ?? "-"), LiteScroller = \(getpid())")
+            guard front != getpid(), retry else { return }
+            // belum berhasil: trik yang umum dipakai — aktifkan Dock sebentar, lalu LiteScroller lagi
+            self.overlaySwitching = true
+            NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.activate(options: [])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.activateOverlay(retry: false)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.overlaySwitching = false }
+            }
+        }
     }
 
     /// Kembalikan menu bar ke aplikasi sebelumnya (restore = false kalau pengguna sudah pindah aplikasi sendiri)
     func endOverlay(restore: Bool) {
         guard overlayActive else { return }
         overlayActive = false
+        overlaySwitching = false
+        overlayWindow?.orderOut(nil)
         let prev = overlayPrevApp
         overlayPrevApp = nil
         if restore && NSApp.isActive {
@@ -700,7 +745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func appSwitched(_ n: Notification) {
         if strip?.isVisible == true { hideStrip() }
         // pengguna pindah ke aplikasi lain saat mode timpa terbuka → jangan rebut fokusnya lagi
-        if overlayActive, let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+        if overlayActive, !overlaySwitching, let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            a.processIdentifier != getpid() {
             endOverlay(restore: false)
         }
